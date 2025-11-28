@@ -70,7 +70,53 @@ class MyPortfolio:
         """
         TODO: Complete Task 4 Below
         """
-        
+        # Strategy: Risk-adjusted momentum / mean-variance hybrid
+        for i in range(self.lookback + 1, len(self.price)):
+            # Rolling window returns
+            R_n = self.returns[assets].iloc[i - self.lookback : i]
+
+            # Compute mean and covariance
+            mu = R_n.mean().values
+            Sigma = R_n.cov().values
+            n = len(assets)
+
+            # Robust fallback: equal weights
+            w_solution = np.ones(n) / n
+
+            try:
+                # Solve a long-only mean-variance problem with risk-aversion gamma
+                with gp.Env(empty=True) as env:
+                    env.setParam("OutputFlag", 0)
+                    env.start()
+                    with gp.Model(env=env) as model:
+                        # Decision variable
+                        w = model.addMVar(n, lb=0.0, ub=1.0, name="w")
+
+                        # Fully invested constraint
+                        model.addConstr(w.sum() == 1.0)
+
+                        # Objective: maximize risk-adjusted return
+                        model.setObjective(mu @ w - (self.gamma / 2.0) * w @ (Sigma @ w),
+                                        gp.GRB.MAXIMIZE)
+
+                        model.optimize()
+
+                        if model.status in [gp.GRB.OPTIMAL, gp.GRB.SUBOPTIMAL]:
+                            w_solution = w.X
+
+            except Exception as e:
+                # fallback to equal weights if optimization fails
+                pass
+
+            # Risk-parity adjustment: scale by inverse volatility
+            vol = np.sqrt(np.diag(Sigma))
+            vol_adjusted = w_solution / (vol + 1e-8)
+            if vol_adjusted.sum() > 0:
+                vol_adjusted /= vol_adjusted.sum()
+                w_solution = vol_adjusted
+
+            # Assign final weights
+            self.portfolio_weights.iloc[i][assets] = w_solution
         
         """
         TODO: Complete Task 4 Above
